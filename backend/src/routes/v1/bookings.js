@@ -13,5 +13,6 @@ router.patch('/rooms/:roomId/status', bookingController.changeRoomStatus);
 router.post('/:id/consumption', bookingController.addConsumption);
 router.delete('/:id/consumption/:itemId', bookingController.removeConsumption);
 router.post('/:id/checkout', bookingController.checkout);
+router.post('/:id/recalculate', bookingController.recalculateAmount);
 
 module.exports = router;
