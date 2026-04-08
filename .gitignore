@@ -1,0 +1,81 @@
+# Dependências
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.production
+.env.development
+
+# Builds
+dist/
+build/
+.next/
+out/
+
+# Banco de dados
+*.db
+*.sqlite
+*.sqlite3
+prisma/*.db
+prisma/*.sqlite
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Arquivos do sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs e editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# Backup de migrações do Prisma
+prisma/migrations/*.backup
+prisma/migrations/*.old
+
+# Uploads
+uploads/
+temp/
+
+# Relatórios gerados
+reports/
+*.xlsx
+*.pdf
+*.csv
+
+# Arquivos de teste
+coverage/
+.nyc_output/
+
+# Docker
+*.pid
+docker-compose.override.yml
+
+# Chaves e certificados
+*.pem
+*.key
+*.crt
+*.p12
+
+# Arquivos temporários
+tmp/
+temp/
+*.tmp
+
+# Arquivos de configuração locais
+.env.*.local
+*.local

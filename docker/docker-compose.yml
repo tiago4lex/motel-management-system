@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: motel-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: motel_db
+      MYSQL_USER: motel_user
+      MYSQL_PASSWORD: motel_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - motel-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: motel-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - motel-network
+    command: redis-server --appendonly yes
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: motel-backend
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://motel_user:motel_password@mysql:3306/motel_db
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - motel-network
+    volumes:
+      - backend_logs:/app/logs
+      - backend_uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: motel-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - motel-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: motel-nginx
+    ports:
+      - "443:443"
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - motel-network
+
+networks:
+  motel-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+  backend_logs:
+  backend_uploads:

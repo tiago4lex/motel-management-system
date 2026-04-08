@@ -1,0 +1,194 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OCCUPIED
+  CLEANING
+  MAINTENANCE
+}
+
+enum BookingType {
+  HOURLY
+  OVERNIGHT
+}
+
+enum BookingStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id        String    @id @default(cuid())
+  username  String    @unique
+  email     String    @unique
+  password  String
+  role      UserRole
+  fullName  String
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  
+  bookings         Booking[]
+  stockMovements   StockMovement[]
+  payments         Payment[]
+  logs             Log[]
+}
+
+model RoomType {
+  id            String    @id @default(cuid())
+  name          String    @unique
+  description   String?
+  initialPrice  Float     // Valor inicial (entrada)
+  hourlyRate    Float     // Valor por hora adicional
+  overnightRate Float     // Valor pernoite
+  cleaningTime  Int       @default(30)
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  rooms         Room[]
+}
+
+model Room {
+  id          String      @id @default(cuid())
+  number      String      @unique
+  typeId      String
+  status      RoomStatus  @default(AVAILABLE)
+  floor       Int?
+  description String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  type         RoomType        @relation(fields: [typeId], references: [id])
+  bookings     Booking[]
+  consumptions Consumption[]
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  roomId          String
+  userId          String
+  bookingType     BookingType
+  status          BookingStatus @default(ACTIVE)
+  startTime       DateTime      @default(now())
+  endTime         DateTime?
+  initialAmount   Float         // Valor pago na entrada
+  currentAmount   Float         @default(0) // Valor atual (com horas extras)
+  totalAmount     Float?        // Valor total final
+  paidAmount      Float?
+  paymentMethod   String?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  room         Room            @relation(fields: [roomId], references: [id])
+  user         User            @relation(fields: [userId], references: [id])
+  consumptions Consumption[]
+  payments     Payment[]
+  timeExtras   TimeExtra[]
+}
+
+model Consumption {
+  id         String   @id @default(cuid())
+  bookingId  String
+  productId  String
+  quantity   Int
+  unitPrice  Float
+  totalPrice Float
+  createdAt  DateTime @default(now())
+  
+  booking Booking @relation(fields: [bookingId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+  room    Room    @relation(fields: [roomId], references: [id])
+  roomId  String
+}
+
+model Product {
+  id              String    @id @default(cuid())
+  name            String    @unique
+  code            String    @unique  // Código de 3 dígitos
+  description     String?
+  price           Float
+  cost            Float?
+  category        String
+  stockControlled Boolean   @default(true)
+  stockQuantity   Int       @default(0)
+  minStockAlert   Int       @default(5)
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  consumptions    Consumption[]
+  stockMovements StockMovement[]
+}
+
+model StockMovement {
+  id          String   @id @default(cuid())
+  productId   String
+  type        String   // IN, OUT, ADJUST
+  quantity    Int
+  reason      String
+  userId      String
+  createdAt   DateTime @default(now())
+  
+  product Product @relation(fields: [productId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+}
+
+model TimeExtra {
+  id          String   @id @default(cuid())
+  bookingId   String
+  hoursAdded  Int
+  amount      Float
+  createdAt   DateTime @default(now())
+  
+  booking Booking @relation(fields: [bookingId], references: [id])
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  bookingId     String
+  amount        Float
+  method        String   // CASH, CARD, PIX, TRANSFER
+  status        String   // PENDING, COMPLETED, REFUNDED
+  transactionId String?
+  userId        String
+  createdAt     DateTime @default(now())
+  
+  booking Booking @relation(fields: [bookingId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+}
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   // JSON value
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model Log {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  entity      String
+  entityId    String?
+  details     String?  // JSON
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+  
+  user User? @relation(fields: [userId], references: [id])
+}
