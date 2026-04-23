@@ -311,7 +311,8 @@ const Reception = () => {
       // Notificar a tela de saída
       await api.post(`/bookings/${bookingId}/start-checkout`);
 
-      toast.info(
+      // Usar toast.success em vez de toast.info
+      toast.success(
         `Checkout do quarto ${booking.room.number} iniciado. Finalize no modal.`,
       );
     } catch (error) {
