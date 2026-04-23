@@ -11,7 +11,6 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(localStorage.getItem('accessToken'));
 
-  // URL base da API - IMPORTANTE: sem barra no final
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
   
   const api = axios.create({
@@ -19,7 +18,7 @@ export const AuthProvider = ({ children }) => {
     headers: {
       'Content-Type': 'application/json',
     },
-    withCredentials: true, // Importante para CORS com credenciais
+    withCredentials: false, // Mudar para false para evitar problemas
   });
 
   // Interceptor para adicionar token
@@ -30,6 +29,8 @@ export const AuthProvider = ({ children }) => {
     }
     console.log('📤 Requisição:', config.method.toUpperCase(), config.url);
     return config;
+  }, (error) => {
+    return Promise.reject(error);
   });
 
   // Interceptor para refresh token
@@ -39,27 +40,36 @@ export const AuthProvider = ({ children }) => {
       return response;
     },
     async (error) => {
-      console.error('❌ Erro na requisição:', error.response?.status, error.config?.url);
-      
       const originalRequest = error.config;
       
+      // Evitar loop infinito
       if (error.response?.status === 401 && !originalRequest._retry) {
         originalRequest._retry = true;
         
         try {
           const refreshToken = localStorage.getItem('refreshToken');
+          
+          if (!refreshToken) {
+            console.log('❌ Refresh token não encontrado');
+            logout();
+            return Promise.reject(error);
+          }
+          
+          console.log('🔄 Tentando refresh token...');
           const response = await axios.post(
             `${API_URL}/api/v1/auth/refresh`,
             { refreshToken },
-            { withCredentials: true }
+            { headers: { 'Content-Type': 'application/json' } }
           );
           
           const { accessToken } = response.data.data;
           localStorage.setItem('accessToken', accessToken);
           originalRequest.headers.Authorization = `Bearer ${accessToken}`;
           
+          console.log('✅ Token renovado com sucesso');
           return api(originalRequest);
         } catch (refreshError) {
+          console.error('❌ Erro no refresh token:', refreshError);
           logout();
           return Promise.reject(refreshError);
         }
@@ -92,7 +102,10 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await api.post('/auth/logout');
+      const accessToken = localStorage.getItem('accessToken');
+      if (accessToken) {
+        await api.post('/auth/logout');
+      }
     } catch (error) {
       console.error('Erro no logout:', error);
     } finally {

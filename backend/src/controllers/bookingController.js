@@ -261,17 +261,14 @@ class BookingController {
         throw new AppError("Atendimento não encontrado", 404);
       }
 
-      console.log("📊 Dados do booking:", {
-        bookingType: booking.bookingType,
-        currentAmount: booking.currentAmount,
-        initialAmount: booking.initialAmount,
-        consumptionsTotal: booking.consumptions.reduce(
-          (sum, c) => sum + c.totalPrice,
-          0,
-        ),
-      });
+      // Calcular tempo decorrido
+      const now = new Date();
+      const start = new Date(booking.startTime);
+      const diffMs = now - start;
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
 
-      // Usar o currentAmount que já está sendo atualizado em tempo real
+      // Usar o currentAmount que já está sendo atualizado
       let totalAmount = booking.currentAmount;
 
       console.log("💰 Valor final do checkout:", totalAmount);
@@ -280,7 +277,7 @@ class BookingController {
       const updatedBooking = await prisma.booking.update({
         where: { id },
         data: {
-          endTime: new Date(),
+          endTime: now,
           totalAmount: totalAmount,
           status: "COMPLETED",
         },
@@ -292,39 +289,67 @@ class BookingController {
         data: { status: "CLEANING" },
       });
 
-      // Registrar log
-      await prisma.log.create({
-        data: {
-          userId: req.user.id,
-          action: "CHECKOUT",
-          entity: "booking",
-          entityId: id,
-          details: JSON.stringify({ totalAmount }),
-          ipAddress: req.ip,
-        },
-      });
-
-      // Emitir evento WebSocket
+      // Emitir evento WebSocket para a tela de saída
       const io = req.app.get("io");
-      io.emit("checkout-completed", {
+      io.emit("checkout-started", {
         bookingId: id,
-        roomId: booking.roomId,
-        totalAmount,
+        roomNumber: booking.room.number,
+        roomType: booking.room.type.name,
+        startTime: booking.startTime,
+        elapsedTime: { hours, minutes },
+        consumptions: booking.consumptions.map((c) => ({
+          name: c.product.name,
+          quantity: c.quantity,
+          unitPrice: c.unitPrice,
+          totalPrice: c.totalPrice,
+        })),
+        totalAmount: totalAmount,
+        initialAmount: booking.initialAmount,
+        extrasTotal: booking.timeExtras.reduce((sum, e) => sum + e.amount, 0),
       });
-
-      console.log("✅ Checkout finalizado com sucesso. Total: R$", totalAmount);
 
       res.json({
         success: true,
         data: {
           booking: updatedBooking,
           totalAmount,
+          hoursElapsed: hours,
+          minutesElapsed: minutes,
           consumptions: booking.consumptions,
         },
         message: `Check-out do quarto ${booking.room.number} finalizado. Total: R$ ${totalAmount.toFixed(2)}`,
       });
     } catch (error) {
-      console.error("❌ Erro no checkout:", error);
+      next(error);
+    }
+  }
+
+  // Buscar histórico de checkouts
+  async getCheckoutHistory(req, res, next) {
+    try {
+      const { limit = 10 } = req.query;
+
+      const checkouts = await prisma.booking.findMany({
+        where: {
+          status: "COMPLETED",
+          endTime: { not: null },
+        },
+        include: {
+          room: true,
+          consumptions: {
+            include: { product: true },
+            take: 5,
+          },
+        },
+        orderBy: { endTime: "desc" },
+        take: parseInt(limit),
+      });
+
+      res.json({
+        success: true,
+        data: checkouts,
+      });
+    } catch (error) {
       next(error);
     }
   }

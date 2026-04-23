@@ -1,206 +1,291 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSocket } from '../contexts/SocketContext';
-import Header from '../components/common/Header';
 import { useTTS } from '../hooks/useTTS';
-import { CurrencyDollarIcon, ClockIcon, ShoppingBagIcon } from '@heroicons/react/24/outline';
+import Header from '../components/common/Header';
+import {
+  CurrencyDollarIcon,
+  ClockIcon,
+  ShoppingBagIcon,
+  HomeIcon,
+  SpeakerWaveIcon,
+  CheckCircleIcon,
+  XMarkIcon
+} from '@heroicons/react/24/outline';
 
 const Exit = () => {
   const { api } = useAuth();
   const { socket } = useSocket();
   const { ttsService } = useTTS();
-  const [activeBookings, setActiveBookings] = useState([]);
-  const [selectedBooking, setSelectedBooking] = useState(null);
-  const [billDetails, setBillDetails] = useState(null);
+  const [activeCheckout, setActiveCheckout] = useState(null);
+  const [checkoutHistory, setCheckoutHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Timer para atualizar o tempo real
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
-    loadActiveBookings();
+    loadRecentCheckouts();
     
     if (socket) {
-      socket.on('booking-created', loadActiveBookings);
-      socket.on('checkout-completed', loadActiveBookings);
+      // Escutar evento de checkout iniciado
+      socket.on('checkout-started', (data) => {
+        console.log('📢 Checkout iniciado:', data);
+        setActiveCheckout(data);
+        
+        // Anunciar via TTS
+        ttsService.speak(`Check-out do quarto ${data.roomNumber} iniciado. Valor total: ${data.totalAmount.toFixed(2)} reais.`);
+      });
+      
+      socket.on('checkout-completed', () => {
+        // Limpar checkout ativo após confirmação
+        setTimeout(() => {
+          setActiveCheckout(null);
+          loadRecentCheckouts();
+        }, 3000);
+      });
+      
       return () => {
-        socket.off('booking-created');
+        socket.off('checkout-started');
         socket.off('checkout-completed');
       };
     }
   }, [socket]);
 
-  const loadActiveBookings = async () => {
+  const loadRecentCheckouts = async () => {
     try {
-      const response = await api.get('/bookings/active');
-      setActiveBookings(response.data.data);
+      const response = await api.get('/bookings/history', {
+        params: { limit: 10 }
+      });
+      setCheckoutHistory(response.data.data);
     } catch (error) {
-      console.error('Erro ao carregar reservas:', error);
+      console.error('Erro ao carregar histórico:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const loadBillDetails = async (bookingId) => {
-    try {
-      const response = await api.get(`/bookings/${bookingId}`);
-      const booking = response.data.data;
-      setBillDetails(booking);
-      setSelectedBooking(booking);
-      
-      // Anunciar via TTS
-      ttsService.announceCheckout(booking.room.number, booking.totalAmount || booking.initialAmount);
-    } catch (error) {
-      console.error('Erro ao carregar detalhes:', error);
-    }
-  };
-
-  const processCheckout = async () => {
-    if (!selectedBooking) return;
-    
-    try {
-      await api.post(`/bookings/${selectedBooking.id}/checkout`);
-      
-      // Anunciar conclusão
-      ttsService.speak(`Check-out do quarto ${selectedBooking.room.number} finalizado.`);
-      
-      setSelectedBooking(null);
-      setBillDetails(null);
-      loadActiveBookings();
-    } catch (error) {
-      console.error('Erro no checkout:', error);
-    }
-  };
-
   const announceBillAgain = () => {
-    if (billDetails) {
-      ttsService.announceCheckout(
-        billDetails.room.number, 
-        billDetails.totalAmount || billDetails.initialAmount
+    if (activeCheckout) {
+      ttsService.speak(
+        `Quarto ${activeCheckout.roomNumber}, valor total: ${activeCheckout.totalAmount.toFixed(2)} reais. ` +
+        `Consumos: ${activeCheckout.consumptions.length} itens.`
       );
     }
   };
 
+  const formatTime = (startTime) => {
+    const start = new Date(startTime);
+    const now = currentTime;
+    const diffMs = now - start;
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+    
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      <div className="min-h-screen bg-gray-100">
+        <Header title="Tela de Saída" />
+        <div className="flex items-center justify-center h-96">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-red-50 to-orange-100">
-      <Header title="Tela de Saída" />
+      <Header title="Tela de Saída - Checkout" />
       
       <div className="p-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Lista de Quartos Ocupados */}
-            <div className="bg-white rounded-lg shadow-xl p-6">
-              <h2 className="text-xl font-bold mb-4">Quartos Ocupados</h2>
-              
-              <div className="space-y-3">
-                {activeBookings.map((booking) => (
-                  <button
-                    key={booking.id}
-                    onClick={() => loadBillDetails(booking.id)}
-                    className={`w-full text-left p-4 rounded-lg border transition-all ${
-                      selectedBooking?.id === booking.id
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-200 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-2xl font-bold">Quarto {booking.room.number}</p>
-                        <p className="text-sm text-gray-600">
-                          Entrada: {new Date(booking.startTime).toLocaleTimeString()}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-600">{booking.customerName}</p>
-                        <p className="text-sm text-gray-500">
-                          {booking.bookingType === 'HOURLY' ? 'Por Hora' : 'Pernoite'}
-                        </p>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                
-                {activeBookings.length === 0 && (
-                  <p className="text-center text-gray-500 py-8">
-                    Nenhum quarto ocupado no momento.
-                  </p>
-                )}
-              </div>
-            </div>
-            
-            {/* Detalhes da Conta */}
-            {billDetails && (
-              <div className="bg-white rounded-lg shadow-xl p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-bold">Conta - Quarto {billDetails.room.number}</h2>
+        <div className="max-w-7xl mx-auto">
+          {/* Checkout Ativo */}
+          {activeCheckout && (
+            <div className="bg-white rounded-lg shadow-2xl mb-6 overflow-hidden border-2 border-red-300">
+              <div className="bg-red-600 text-white px-6 py-4">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <HomeIcon className="h-8 w-8" />
+                    <h2 className="text-2xl font-bold">CHECKOUT EM ANDAMENTO</h2>
+                  </div>
                   <button
                     onClick={announceBillAgain}
-                    className="text-primary-600 hover:text-primary-700"
+                    className="bg-purple-500 hover:bg-purple-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
                   >
-                    🔊 Anunciar
-                  </button>
-                </div>
-                
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center p-3 bg-gray-50 rounded">
-                    <div className="flex items-center space-x-2">
-                      <ClockIcon className="h-5 w-5 text-gray-500" />
-                      <span>Tempo utilizado</span>
-                    </div>
-                    <span className="font-medium">
-                      {Math.ceil((new Date() - new Date(billDetails.startTime)) / (1000 * 60 * 60))} horas
-                    </span>
-                  </div>
-                  
-                  <div className="flex justify-between items-center p-3 bg-gray-50 rounded">
-                    <div className="flex items-center space-x-2">
-                      <CurrencyDollarIcon className="h-5 w-5 text-gray-500" />
-                      <span>Valor base</span>
-                    </div>
-                    <span className="font-medium">R$ {billDetails.initialAmount.toFixed(2)}</span>
-                  </div>
-                  
-                  {billDetails.consumptions && billDetails.consumptions.length > 0 && (
-                    <div className="border-t pt-3">
-                      <div className="flex items-center space-x-2 mb-2">
-                        <ShoppingBagIcon className="h-5 w-5 text-gray-500" />
-                        <span className="font-medium">Consumos</span>
-                      </div>
-                      <div className="space-y-2">
-                        {billDetails.consumptions.map((item) => (
-                          <div key={item.id} className="flex justify-between text-sm">
-                            <span>{item.product.name} x{item.quantity}</span>
-                            <span>R$ {item.totalPrice.toFixed(2)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  <div className="border-t pt-3 mt-3">
-                    <div className="flex justify-between items-center text-lg font-bold">
-                      <span>TOTAL</span>
-                      <span className="text-2xl text-green-600">
-                        R$ {(billDetails.totalAmount || billDetails.initialAmount).toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <button
-                    onClick={processCheckout}
-                    className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors mt-4"
-                  >
-                    Confirmar Pagamento e Check-out
+                    <SpeakerWaveIcon className="h-5 w-5" />
+                    Falar Novamente
                   </button>
                 </div>
               </div>
-            )}
-          </div>
+              
+              <div className="p-6">
+                {/* Informações do Quarto */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                  <div className="bg-gray-50 rounded-lg p-4 text-center">
+                    <p className="text-sm text-gray-500 mb-1">Quarto</p>
+                    <p className="text-4xl font-bold text-gray-800">{activeCheckout.roomNumber}</p>
+                    <p className="text-sm text-gray-600 mt-1">{activeCheckout.roomType}</p>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-lg p-4 text-center">
+                    <p className="text-sm text-gray-500 mb-1">Tempo de Permanência</p>
+                    <div className="flex items-center justify-center gap-2">
+                      <ClockIcon className="h-6 w-6 text-yellow-600" />
+                      <p className="text-3xl font-bold text-yellow-600 font-mono">
+                        {formatTime(activeCheckout.startTime)}
+                      </p>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {activeCheckout.elapsedTime?.hours} horas e {activeCheckout.elapsedTime?.minutes} minutos
+                    </p>
+                  </div>
+                  
+                  <div className="bg-green-50 rounded-lg p-4 text-center border-2 border-green-300">
+                    <p className="text-sm text-gray-500 mb-1">Valor Total</p>
+                    <p className="text-3xl font-bold text-green-600">
+                      R$ {activeCheckout.totalAmount.toFixed(2)}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Inicial: R$ {activeCheckout.initialAmount?.toFixed(2) || '0,00'}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Detalhamento dos Valores */}
+                <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                  <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+                    <CurrencyDollarIcon className="h-5 w-5" />
+                    Detalhamento dos Valores
+                  </h3>
+                  <div className="space-y-2">
+                    <div className="flex justify-between py-2 border-b">
+                      <span>Valor Base ({activeCheckout.bookingType === 'OVERNIGHT' ? 'Pernoite' : 'Por Hora'})</span>
+                      <span className="font-medium">R$ {activeCheckout.initialAmount?.toFixed(2) || '0,00'}</span>
+                    </div>
+                    {activeCheckout.extrasTotal > 0 && (
+                      <div className="flex justify-between py-2 border-b text-orange-600">
+                        <span>Horas Extras</span>
+                        <span className="font-medium">R$ {activeCheckout.extrasTotal.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {activeCheckout.consumptions && activeCheckout.consumptions.length > 0 && (
+                      <div className="flex justify-between py-2 border-b text-blue-600">
+                        <span>Consumos</span>
+                        <span className="font-medium">
+                          R$ {activeCheckout.consumptions.reduce((sum, c) => sum + c.totalPrice, 0).toFixed(2)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between py-2 text-lg font-bold text-green-600">
+                      <span>TOTAL</span>
+                      <span>R$ {activeCheckout.totalAmount.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Lista de Consumos */}
+                {activeCheckout.consumptions && activeCheckout.consumptions.length > 0 && (
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+                      <ShoppingBagIcon className="h-5 w-5" />
+                      Consumos Realizados
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-200">
+                          <tr>
+                            <th className="px-4 py-2 text-left">Produto</th>
+                            <th className="px-4 py-2 text-center">Quantidade</th>
+                            <th className="px-4 py-2 text-right">Valor Unitário</th>
+                            <th className="px-4 py-2 text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeCheckout.consumptions.map((item, idx) => (
+                            <tr key={idx} className="border-b">
+                              <td className="px-4 py-2">{item.name}</td>
+                              <td className="px-4 py-2 text-center">{item.quantity}</td>
+                              <td className="px-4 py-2 text-right">R$ {item.unitPrice.toFixed(2)}</td>
+                              <td className="px-4 py-2 text-right font-medium">R$ {item.totalPrice.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot className="bg-gray-100">
+                          <tr>
+                            <td colSpan="3" className="px-4 py-2 text-right font-bold">Total Consumos</td>
+                            <td className="px-4 py-2 text-right font-bold text-green-600">
+                              R$ {activeCheckout.consumptions.reduce((sum, c) => sum + c.totalPrice, 0).toFixed(2)}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Status do Checkout */}
+                <div className="mt-6 flex justify-center">
+                  <div className="bg-yellow-100 text-yellow-800 px-6 py-3 rounded-lg flex items-center gap-2">
+                    <ClockIcon className="h-5 w-5 animate-pulse" />
+                    <span>Aguardando confirmação do pagamento...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Checkouts Finalizados Recentemente */}
+          {checkoutHistory.length > 0 && (
+            <div className="bg-white rounded-lg shadow">
+              <div className="bg-gray-800 text-white px-6 py-4 rounded-t-lg">
+                <h3 className="text-lg font-bold">Últimos Checkouts Realizados</h3>
+              </div>
+              <div className="p-4">
+                <div className="space-y-2">
+                  {checkoutHistory.map((checkout) => (
+                    <div key={checkout.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <CheckCircleIcon className="h-6 w-6 text-green-600" />
+                        <div>
+                          <p className="font-bold">Quarto {checkout.room?.number}</p>
+                          <p className="text-xs text-gray-500">
+                            {new Date(checkout.endTime).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-green-600">R$ {checkout.totalAmount?.toFixed(2)}</p>
+                        <p className="text-xs text-gray-500">
+                          {checkout.consumptions?.length || 0} consumos
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {!activeCheckout && checkoutHistory.length === 0 && (
+            <div className="bg-white rounded-lg shadow p-12 text-center">
+              <div className="text-gray-400 mb-4">
+                <HomeIcon className="h-16 w-16 mx-auto" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-600 mb-2">Nenhum checkout ativo</h3>
+              <p className="text-gray-500">
+                Quando um checkout for iniciado na recepção, ele aparecerá automaticamente aqui.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

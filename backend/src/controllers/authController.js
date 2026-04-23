@@ -35,19 +35,18 @@ class AuthController {
       const accessToken = jwt.sign(
         { id: user.id, role: user.role },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN }
+        { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
       );
       
       const refreshToken = jwt.sign(
         { id: user.id },
         process.env.JWT_REFRESH_SECRET,
-        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN }
+        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
       );
       
-      // Log de login
       logger.info(`Usuário ${user.username} fez login`);
       
-      // Registrar log no banco
+      // Registrar log
       await prisma.log.create({
         data: {
           userId: user.id,
@@ -99,23 +98,32 @@ class AuthController {
       const newAccessToken = jwt.sign(
         { id: user.id, role: user.role },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN }
+        { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
       );
+      
+      logger.info(`Token renovado para usuário ${user.username}`);
       
       res.json({
         success: true,
         data: { accessToken: newAccessToken }
       });
     } catch (error) {
-      next(error);
+      if (error.name === 'JsonWebTokenError') {
+        next(new AppError('Token inválido', 401));
+      } else if (error.name === 'TokenExpiredError') {
+        next(new AppError('Token expirado', 401));
+      } else {
+        next(error);
+      }
     }
   }
   
   async logout(req, res, next) {
     try {
-      // Logout é gerenciado no frontend (remover token)
-      // Aqui apenas registramos o logout
+      // Não precisa fazer nada no backend além de registrar
       if (req.user) {
+        logger.info(`Usuário ${req.user.username} fez logout`);
+        
         await prisma.log.create({
           data: {
             userId: req.user.id,
@@ -125,8 +133,6 @@ class AuthController {
             ipAddress: req.ip
           }
         });
-        
-        logger.info(`Usuário ${req.user.username} fez logout`);
       }
       
       res.json({

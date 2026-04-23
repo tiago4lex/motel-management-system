@@ -7,6 +7,7 @@ router.use(authMiddleware.authenticate);
 
 router.get('/active', bookingController.getActiveBookings);
 router.get('/products/search', bookingController.searchProduct);
+router.get('/history', bookingController.getCheckoutHistory);
 router.post('/', bookingController.createBooking);
 router.patch('/:id/type', bookingController.changeBookingType);
 router.patch('/rooms/:roomId/status', bookingController.changeRoomStatus);
