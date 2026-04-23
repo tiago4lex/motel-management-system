@@ -1,4 +1,3 @@
-// frontend/src/pages/Exit.jsx
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useSocket } from "../contexts/SocketContext";
@@ -11,7 +10,6 @@ import {
   HomeIcon,
   SpeakerWaveIcon,
   CheckCircleIcon,
-  XMarkIcon,
   PrinterIcon,
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
@@ -24,6 +22,7 @@ const Exit = () => {
   const [checkoutHistory, setCheckoutHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [lastUpdatedItemId, setLastUpdatedItemId] = useState(null);
 
   // Timer para atualizar o tempo real
   useEffect(() => {
@@ -46,7 +45,7 @@ const Exit = () => {
         ttsService.speak(
           `Check-out do quarto ${data.roomNumber} iniciado. ` +
             `Tempo de permanência: ${data.elapsedTime.hours} horas e ${data.elapsedTime.minutes} minutos. ` +
-            `Valor total: ${data.totalAmount.toFixed(2)} reais.`,
+            `Valor total: ${data.totalAmount.toFixed(2)} reais.`
         );
 
         toast.success(`Checkout do quarto ${data.roomNumber} iniciado!`, {
@@ -55,7 +54,32 @@ const Exit = () => {
         });
       });
 
-      // Escutar evento de checkout completado (quando clicar em FINALIZAR)
+      // Escutar evento de atualização de consumos no checkout
+      socket.on("checkout-consumption-updated", (data) => {
+        console.log("📢 Consumo atualizado no checkout:", data);
+
+        // Encontrar o item recém-adicionado (se houver)
+        if (activeCheckout && data.consumptions.length > (activeCheckout.consumptions?.length || 0)) {
+          const newItem = data.consumptions.find(
+            (c) => !activeCheckout.consumptions?.some((ac) => ac.id === c.id)
+          );
+          if (newItem) {
+            setLastUpdatedItemId(newItem.id);
+            setTimeout(() => setLastUpdatedItemId(null), 1000);
+          }
+        }
+
+        setActiveCheckout((prev) => {
+          if (!prev || prev.bookingId !== data.bookingId) return prev;
+          return {
+            ...prev,
+            consumptions: data.consumptions,
+            totalAmount: data.newCurrentAmount,
+          };
+        });
+      });
+
+      // Escutar evento de checkout completado
       socket.on("checkout-completed", (data) => {
         console.log("📢 Checkout completado:", data);
 
@@ -67,7 +91,7 @@ const Exit = () => {
 
         // Anunciar finalização
         ttsService.speak(
-          `Check-out do quarto ${data.roomNumber} finalizado. Total pago: ${data.totalAmount.toFixed(2)} reais.`,
+          `Check-out do quarto ${data.roomNumber} finalizado. Total pago: ${data.totalAmount.toFixed(2)} reais.`
         );
 
         toast.success(`Check-out do quarto ${data.roomNumber} finalizado!`, {
@@ -78,10 +102,11 @@ const Exit = () => {
 
       return () => {
         socket.off("checkout-started");
+        socket.off("checkout-consumption-updated");
         socket.off("checkout-completed");
       };
     }
-  }, [socket]);
+  }, [socket, activeCheckout, ttsService]);
 
   const loadRecentCheckouts = async () => {
     try {
@@ -103,7 +128,7 @@ const Exit = () => {
           `tipo ${activeCheckout.roomType}, ` +
           `tempo de permanência: ${activeCheckout.elapsedTime.hours} horas e ${activeCheckout.elapsedTime.minutes} minutos, ` +
           `valor total: ${activeCheckout.totalAmount.toFixed(2)} reais. ` +
-          `${activeCheckout.consumptions.length} consumos realizados.`,
+          `${activeCheckout.consumptions?.length || 0} consumos realizados.`
       );
     }
   };
@@ -129,11 +154,9 @@ const Exit = () => {
           <title>Comprovante - Quarto ${activeCheckout.roomNumber}</title>
           <style>
             body { font-family: monospace; padding: 20px; }
-            h1 { text-align: center; }
             .bill { max-width: 400px; margin: 0 auto; }
             .header { text-align: center; margin-bottom: 20px; }
             .total { font-size: 18px; font-weight: bold; margin-top: 20px; text-align: right; }
-            .item { margin: 5px 0; }
             table { width: 100%; border-collapse: collapse; }
             th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
           </style>
@@ -149,26 +172,30 @@ const Exit = () => {
               <p><strong>Quarto:</strong> ${activeCheckout.roomNumber}</p>
               <p><strong>Tipo:</strong> ${activeCheckout.roomType}</p>
               <p><strong>Entrada:</strong> ${new Date(activeCheckout.startTime).toLocaleString()}</p>
-              <p><strong>Saída:</strong> ${new Date(activeCheckout.endTime || currentTime).toLocaleString()}</p>
+              <p><strong>Saída:</strong> ${new Date().toLocaleString()}</p>
               <p><strong>Tempo:</strong> ${activeCheckout.elapsedTime.hours}h ${activeCheckout.elapsedTime.minutes}m</p>
             </div>
             <table>
               <thead>
-                <tr><th>Item</th><th>Qtd</th><th>Valor</th></tr>
+                <tr><th>Produto</th><th>Qtd</th><th>Valor Unit.</th><th>Total</th></tr>
               </thead>
               <tbody>
-                ${activeCheckout.consumptions
-                  .map(
-                    (c) => `
-                  <tr><td>${c.name}</td><td>${c.quantity}</td><td>R$ ${c.totalPrice.toFixed(2)}</td></tr>
-                `,
-                  )
-                  .join("")}
+                ${activeCheckout.consumptions?.map((item) => `
+                  <tr>
+                    <td>${item.name}</td>
+                    <td style="text-align: center">${item.quantity}</td>
+                    <td style="text-align: right">R$ ${item.unitPrice.toFixed(2)}</td>
+                    <td style="text-align: right">R$ ${item.totalPrice.toFixed(2)}</td>
+                  </tr>
+                `).join('')}
               </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="3" style="text-align: right"><strong>Total:</strong></td>
+                  <td style="text-align: right"><strong>R$ ${activeCheckout.totalAmount.toFixed(2)}</strong></td>
+                </tr>
+              </tfoot>
             </table>
-            <div class="total">
-              TOTAL: R$ ${activeCheckout.totalAmount.toFixed(2)}
-            </div>
             <div class="footer" style="text-align: center; margin-top: 30px;">
               <p>Obrigado pela preferência!</p>
             </div>
@@ -199,7 +226,7 @@ const Exit = () => {
         <div className="max-w-7xl mx-auto">
           {/* Checkout Ativo */}
           {activeCheckout && (
-            <div className="bg-white rounded-lg shadow-2xl mb-6 overflow-hidden border-2 border-red-300 animate-pulse-slow">
+            <div className="bg-white rounded-lg shadow-2xl mb-6 overflow-hidden border-2 border-red-300">
               <div className="bg-red-600 text-white px-6 py-4">
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
@@ -361,10 +388,12 @@ const Exit = () => {
                             </tr>
                           </thead>
                           <tbody>
-                            {activeCheckout.consumptions.map((item, idx) => (
+                            {activeCheckout.consumptions.map((item) => (
                               <tr
-                                key={idx}
-                                className="border-b hover:bg-gray-100"
+                                key={item.id}
+                                className={`border-b hover:bg-gray-100 transition-colors ${
+                                  lastUpdatedItemId === item.id ? "bg-green-100" : ""
+                                }`}
                               >
                                 <td className="px-4 py-2 font-mono text-sm">
                                   {item.code}
