@@ -1,3 +1,4 @@
+// backend/src/controllers/bookingController.js
 const { prisma } = require("../config/database");
 const { AppError } = require("../middleware/errorHandler");
 const { logger } = require("../config/logger");
@@ -26,7 +27,7 @@ class BookingController {
         const start = new Date(booking.startTime);
         const hoursElapsed = Math.floor((now - start) / (1000 * 60 * 60));
         const minutesElapsed = Math.floor(
-          ((now - start) % (1000 * 60 * 60)) / (1000 * 60),
+          ((now - start) % (1000 * 60 * 60)) / (1000 * 60)
         );
 
         let currentAmount = booking.initialAmount;
@@ -39,14 +40,14 @@ class BookingController {
         // Adicionar consumos
         const consumptionsTotal = booking.consumptions.reduce(
           (sum, c) => sum + c.totalPrice,
-          0,
+          0
         );
         currentAmount += consumptionsTotal;
 
         // Adicionar horas extras manuais
         const extrasTotal = booking.timeExtras.reduce(
           (sum, e) => sum + e.amount,
-          0,
+          0
         );
         currentAmount += extrasTotal;
 
@@ -65,7 +66,7 @@ class BookingController {
           .length,
         occupied: bookingsWithCurrent.length,
         confere: bookingsWithCurrent.filter(
-          (b) => b.bookingType === "OVERNIGHT",
+          (b) => b.bookingType === "OVERNIGHT"
         ).length,
       };
 
@@ -79,12 +80,118 @@ class BookingController {
     }
   }
 
-  // Criar nova reserva (check-in) - sem nome/telefone
+  // Buscar booking por ID
+  async getBookingById(req, res, next) {
+    try {
+      const { id } = req.params;
+
+      console.log("🔍 Buscando booking:", id);
+
+      const booking = await prisma.booking.findUnique({
+        where: { id },
+        include: {
+          room: {
+            include: { type: true },
+          },
+          consumptions: {
+            include: { product: true },
+          },
+          timeExtras: true,
+          user: {
+            select: { id: true, fullName: true },
+          },
+        },
+      });
+
+      if (!booking) {
+        throw new AppError("Atendimento não encontrado", 404);
+      }
+
+      // Calcular tempo decorrido e valor atual
+      const now = new Date();
+      const start = new Date(booking.startTime);
+      const hoursElapsed = Math.floor((now - start) / (1000 * 60 * 60));
+      const minutesElapsed = Math.floor(
+        ((now - start) % (1000 * 60 * 60)) / (1000 * 60)
+      );
+
+      let currentAmount = booking.currentAmount;
+
+      // Se o booking estiver ativo, recalcular o valor
+      if (booking.status === "ACTIVE") {
+        let baseAmount = 0;
+
+        if (booking.bookingType === "OVERNIGHT") {
+          baseAmount = booking.room.type.overnightRate;
+        } else {
+          baseAmount =
+            booking.room.type.initialPrice +
+            hoursElapsed * booking.room.type.hourlyRate;
+        }
+
+        const consumptionsTotal =
+          booking.consumptions?.reduce(
+            (sum, c) => sum + (c.totalPrice || 0),
+            0
+          ) || 0;
+        const extrasTotal =
+          booking.timeExtras?.reduce((sum, e) => sum + (e.amount || 0), 0) || 0;
+        currentAmount = baseAmount + consumptionsTotal + extrasTotal;
+      }
+
+      const bookingWithDetails = {
+        ...booking,
+        hoursElapsed,
+        minutesElapsed,
+        currentAmount,
+        timeDisplay: `${hoursElapsed}h${minutesElapsed}m`,
+      };
+
+      res.json({
+        success: true,
+        data: bookingWithDetails,
+      });
+    } catch (error) {
+      console.error("❌ Erro ao buscar booking:", error);
+      next(error);
+    }
+  }
+
+  // Buscar histórico de checkouts
+  async getCheckoutHistory(req, res, next) {
+    try {
+      const { limit = 10 } = req.query;
+
+      const checkouts = await prisma.booking.findMany({
+        where: {
+          status: "COMPLETED",
+          endTime: { not: null },
+        },
+        include: {
+          room: true,
+          consumptions: {
+            include: { product: true },
+            take: 5,
+          },
+        },
+        orderBy: { endTime: "desc" },
+        take: parseInt(limit),
+      });
+
+      res.json({
+        success: true,
+        data: checkouts,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Criar nova reserva (check-in)
   async createBooking(req, res, next) {
     try {
       const { roomId, bookingType } = req.body;
 
-      // Verificar se quarto está disponível
       const room = await prisma.room.findUnique({
         where: { id: roomId },
         include: { type: true },
@@ -98,10 +205,8 @@ class BookingController {
         throw new AppError("Quarto não está disponível", 400);
       }
 
-      // Valor inicial baseado no tipo do quarto
       const initialAmount = room.type.initialPrice;
 
-      // Criar reserva (sem nome/telefone)
       const booking = await prisma.booking.create({
         data: {
           roomId,
@@ -119,13 +224,11 @@ class BookingController {
         },
       });
 
-      // Atualizar status do quarto
       await prisma.room.update({
         where: { id: roomId },
         data: { status: "OCCUPIED" },
       });
 
-      // Registrar log
       await prisma.log.create({
         data: {
           userId: req.user.id,
@@ -137,7 +240,6 @@ class BookingController {
         },
       });
 
-      // Emitir evento WebSocket
       const io = req.app.get("io");
       io.emit("booking-created", { bookingId: booking.id, roomId });
 
@@ -182,7 +284,6 @@ class BookingController {
 
       const totalPrice = product.price * quantity;
 
-      // Criar consumo - sem include para evitar erro
       const consumption = await prisma.consumption.create({
         data: {
           bookingId: id,
@@ -194,7 +295,6 @@ class BookingController {
         },
       });
 
-      // Atualizar valor atual da reserva
       await prisma.booking.update({
         where: { id },
         data: {
@@ -204,7 +304,6 @@ class BookingController {
         },
       });
 
-      // Atualizar estoque
       if (product.stockControlled) {
         await prisma.product.update({
           where: { id: productId },
@@ -212,13 +311,11 @@ class BookingController {
         });
       }
 
-      // Buscar o consumo com o produto para retornar
       const consumptionWithProduct = await prisma.consumption.findUnique({
         where: { id: consumption.id },
         include: { product: true },
       });
 
-      // Emitir evento
       const io = req.app.get("io");
       io.emit("consumption-added", {
         bookingId: id,
@@ -233,123 +330,6 @@ class BookingController {
       });
     } catch (error) {
       console.error("❌ Erro ao adicionar consumo:", error);
-      next(error);
-    }
-  }
-
-  // Checkout
-  async checkout(req, res, next) {
-    try {
-      const { id } = req.params;
-
-      console.log("🏁 Iniciando checkout do booking:", id);
-
-      const booking = await prisma.booking.findUnique({
-        where: { id },
-        include: {
-          consumptions: {
-            include: { product: true },
-          },
-          timeExtras: true,
-          room: {
-            include: { type: true },
-          },
-        },
-      });
-
-      if (!booking || booking.status !== "ACTIVE") {
-        throw new AppError("Atendimento não encontrado", 404);
-      }
-
-      // Calcular tempo decorrido
-      const now = new Date();
-      const start = new Date(booking.startTime);
-      const diffMs = now - start;
-      const hours = Math.floor(diffMs / (1000 * 60 * 60));
-      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-
-      // Usar o currentAmount que já está sendo atualizado
-      let totalAmount = booking.currentAmount;
-
-      console.log("💰 Valor final do checkout:", totalAmount);
-
-      // Finalizar reserva
-      const updatedBooking = await prisma.booking.update({
-        where: { id },
-        data: {
-          endTime: now,
-          totalAmount: totalAmount,
-          status: "COMPLETED",
-        },
-      });
-
-      // Atualizar status do quarto para limpeza
-      await prisma.room.update({
-        where: { id: booking.roomId },
-        data: { status: "CLEANING" },
-      });
-
-      // Emitir evento WebSocket para a tela de saída
-      const io = req.app.get("io");
-      io.emit("checkout-started", {
-        bookingId: id,
-        roomNumber: booking.room.number,
-        roomType: booking.room.type.name,
-        startTime: booking.startTime,
-        elapsedTime: { hours, minutes },
-        consumptions: booking.consumptions.map((c) => ({
-          name: c.product.name,
-          quantity: c.quantity,
-          unitPrice: c.unitPrice,
-          totalPrice: c.totalPrice,
-        })),
-        totalAmount: totalAmount,
-        initialAmount: booking.initialAmount,
-        extrasTotal: booking.timeExtras.reduce((sum, e) => sum + e.amount, 0),
-      });
-
-      res.json({
-        success: true,
-        data: {
-          booking: updatedBooking,
-          totalAmount,
-          hoursElapsed: hours,
-          minutesElapsed: minutes,
-          consumptions: booking.consumptions,
-        },
-        message: `Check-out do quarto ${booking.room.number} finalizado. Total: R$ ${totalAmount.toFixed(2)}`,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  // Buscar histórico de checkouts
-  async getCheckoutHistory(req, res, next) {
-    try {
-      const { limit = 10 } = req.query;
-
-      const checkouts = await prisma.booking.findMany({
-        where: {
-          status: "COMPLETED",
-          endTime: { not: null },
-        },
-        include: {
-          room: true,
-          consumptions: {
-            include: { product: true },
-            take: 5,
-          },
-        },
-        orderBy: { endTime: "desc" },
-        take: parseInt(limit),
-      });
-
-      res.json({
-        success: true,
-        data: checkouts,
-      });
-    } catch (error) {
       next(error);
     }
   }
@@ -371,7 +351,6 @@ class BookingController {
         throw new AppError("Consumo não encontrado", 404);
       }
 
-      // Devolver ao estoque
       if (consumption.product.stockControlled) {
         await prisma.product.update({
           where: { id: consumption.productId },
@@ -379,7 +358,6 @@ class BookingController {
         });
       }
 
-      // Remover do valor atual
       await prisma.booking.update({
         where: { id },
         data: {
@@ -410,7 +388,6 @@ class BookingController {
 
       console.log("🔄 Alterando tipo de alocação:", { id, bookingType });
 
-      // Buscar o booking com todos os dados necessários
       const booking = await prisma.booking.findUnique({
         where: { id },
         include: {
@@ -428,15 +405,12 @@ class BookingController {
         throw new AppError("Atendimento não encontrado", 404);
       }
 
-      // Calcular o novo valor baseado no tipo
       let baseAmount = 0;
 
       if (bookingType === "OVERNIGHT") {
-        // PERNOITE: valor fixo do tipo de quarto
         baseAmount = booking.room.type.overnightRate;
         console.log("🌙 PERNOITE - Valor fixo:", baseAmount);
       } else {
-        // POR HORA: calcular baseado no tempo decorrido
         const now = new Date();
         const start = new Date(booking.startTime);
         const hoursElapsed = Math.ceil((now - start) / (1000 * 60 * 60));
@@ -447,28 +421,24 @@ class BookingController {
           "💰 POR HORA - Horas:",
           hoursElapsed,
           "Valor base:",
-          baseAmount,
+          baseAmount
         );
       }
 
-      // Somar consumos
       const consumptionsTotal =
         booking.consumptions?.reduce(
           (sum, c) => sum + (c.totalPrice || 0),
-          0,
+          0
         ) || 0;
       console.log("🍕 Total consumos:", consumptionsTotal);
 
-      // Somar horas extras manuais
       const extrasTotal =
         booking.timeExtras?.reduce((sum, e) => sum + (e.amount || 0), 0) || 0;
       console.log("⏰ Total extras:", extrasTotal);
 
-      // Valor final
       const newCurrentAmount = baseAmount + consumptionsTotal + extrasTotal;
       console.log("💰 Valor final:", newCurrentAmount);
 
-      // Atualizar o booking
       const updatedBooking = await prisma.booking.update({
         where: { id },
         data: {
@@ -485,14 +455,6 @@ class BookingController {
         },
       });
 
-      console.log("✅ Booking atualizado:", {
-        id: updatedBooking.id,
-        bookingType: updatedBooking.bookingType,
-        currentAmount: updatedBooking.currentAmount,
-        initialAmount: updatedBooking.initialAmount,
-      });
-
-      // Emitir evento WebSocket
       const io = req.app.get("io");
       io.emit("booking-type-changed", {
         bookingId: id,
@@ -504,10 +466,221 @@ class BookingController {
       res.json({
         success: true,
         data: updatedBooking,
-        message: `Tipo alterado para ${bookingType === "HOURLY" ? "Por Hora" : "Pernoite"} - Valor: R$ ${newCurrentAmount.toFixed(2)}`,
+        message: `Tipo alterado para ${
+          bookingType === "HOURLY" ? "Por Hora" : "Pernoite"
+        } - Valor: R$ ${newCurrentAmount.toFixed(2)}`,
       });
     } catch (error) {
       console.error("❌ Erro ao alterar tipo:", error);
+      next(error);
+    }
+  }
+
+  // Iniciar processo de checkout (mostrar na tela de saída)
+  async startCheckout(req, res, next) {
+    try {
+      const { id } = req.params;
+
+      console.log("🏁 Iniciando processo de checkout do booking:", id);
+
+      const booking = await prisma.booking.findUnique({
+        where: { id },
+        include: {
+          consumptions: {
+            include: { product: true },
+          },
+          timeExtras: true,
+          room: {
+            include: { type: true },
+          },
+        },
+      });
+
+      if (!booking) {
+        throw new AppError("Atendimento não encontrado", 404);
+      }
+
+      if (booking.status !== "ACTIVE") {
+        throw new AppError("Atendimento não está ativo", 400);
+      }
+
+      const now = new Date();
+      const start = new Date(booking.startTime);
+      const diffMs = now - start;
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+      let baseAmount = 0;
+      if (booking.bookingType === "OVERNIGHT") {
+        baseAmount = booking.room.type.overnightRate;
+      } else {
+        baseAmount =
+          booking.room.type.initialPrice + hours * booking.room.type.hourlyRate;
+      }
+
+      const consumptionsTotal =
+        booking.consumptions?.reduce(
+          (sum, c) => sum + (c.totalPrice || 0),
+          0
+        ) || 0;
+      const extrasTotal =
+        booking.timeExtras?.reduce((sum, e) => sum + (e.amount || 0), 0) || 0;
+      const totalAmount = baseAmount + consumptionsTotal + extrasTotal;
+
+      await prisma.booking.update({
+        where: { id },
+        data: { currentAmount: totalAmount },
+      });
+
+      const checkoutData = {
+        bookingId: id,
+        roomNumber: booking.room.number,
+        roomType: booking.room.type.name,
+        startTime: booking.startTime,
+        elapsedTime: { hours, minutes },
+        consumptions: booking.consumptions.map((c) => ({
+          id: c.id,
+          name: c.product.name,
+          code: c.product.code,
+          quantity: c.quantity,
+          unitPrice: c.unitPrice,
+          totalPrice: c.totalPrice,
+        })),
+        totalAmount: totalAmount,
+        initialAmount: booking.initialAmount,
+        extrasTotal: extrasTotal,
+        bookingType: booking.bookingType,
+      };
+
+      const io = req.app.get("io");
+      io.emit("checkout-started", checkoutData);
+
+      console.log(
+        "✅ Checkout iniciado com sucesso para o quarto:",
+        booking.room.number
+      );
+
+      res.json({
+        success: true,
+        data: checkoutData,
+        message: `Processo de checkout do quarto ${booking.room.number} iniciado`,
+      });
+    } catch (error) {
+      console.error("❌ Erro ao iniciar checkout:", error);
+      next(error);
+    }
+  }
+
+  // Finalizar checkout (confirmar pagamento)
+  async confirmCheckout(req, res, next) {
+    try {
+      const { id } = req.params;
+
+      console.log("✅ Confirmando checkout do booking:", id);
+
+      const booking = await prisma.booking.findUnique({
+        where: { id },
+        include: {
+          consumptions: {
+            include: { product: true },
+          },
+          timeExtras: true,
+          room: {
+            include: { type: true },
+          },
+        },
+      });
+
+      if (!booking) {
+        throw new AppError("Atendimento não encontrado", 404);
+      }
+
+      if (booking.status !== "ACTIVE") {
+        throw new AppError("Atendimento não está ativo", 400);
+      }
+
+      const now = new Date();
+      const start = new Date(booking.startTime);
+      const hours = Math.floor((now - start) / (1000 * 60 * 60));
+
+      let finalAmount = 0;
+      if (booking.bookingType === "OVERNIGHT") {
+        finalAmount = booking.room.type.overnightRate;
+      } else {
+        finalAmount =
+          booking.room.type.initialPrice + hours * booking.room.type.hourlyRate;
+      }
+
+      const consumptionsTotal =
+        booking.consumptions?.reduce(
+          (sum, c) => sum + (c.totalPrice || 0),
+          0
+        ) || 0;
+      const extrasTotal =
+        booking.timeExtras?.reduce((sum, e) => sum + (e.amount || 0), 0) || 0;
+      finalAmount += consumptionsTotal + extrasTotal;
+
+      const updatedBooking = await prisma.booking.update({
+        where: { id },
+        data: {
+          endTime: now,
+          totalAmount: finalAmount,
+          currentAmount: finalAmount,
+          status: "COMPLETED",
+        },
+      });
+
+      await prisma.room.update({
+        where: { id: booking.roomId },
+        data: { status: "CLEANING" },
+      });
+
+      await prisma.log.create({
+        data: {
+          userId: req.user.id,
+          action: "CHECKOUT",
+          entity: "booking",
+          entityId: id,
+          details: JSON.stringify({
+            totalAmount: finalAmount,
+            hoursElapsed: hours,
+          }),
+          ipAddress: req.ip,
+        },
+      });
+
+      const io = req.app.get("io");
+      io.emit("checkout-completed", {
+        bookingId: id,
+        roomId: booking.roomId,
+        roomNumber: booking.room.number,
+        totalAmount: finalAmount,
+      });
+
+      io.emit("checkout-confirmed", {
+        bookingId: id,
+        roomId: booking.roomId,
+        roomNumber: booking.room.number,
+        totalAmount: finalAmount,
+      });
+
+      console.log(
+        "✅ Checkout confirmado para o quarto:",
+        booking.room.number,
+        "Valor:",
+        finalAmount
+      );
+
+      res.json({
+        success: true,
+        data: {
+          booking: updatedBooking,
+          totalAmount: finalAmount,
+        },
+        message: `Check-out do quarto ${booking.room.number} finalizado. Total: R$ ${finalAmount.toFixed(2)}`,
+      });
+    } catch (error) {
+      console.error("❌ Erro ao confirmar checkout:", error);
       next(error);
     }
   }
@@ -534,7 +707,6 @@ class BookingController {
         include: { type: true },
       });
 
-      // Emitir evento WebSocket
       const io = req.app.get("io");
       io.emit("room-status-update", {
         roomId,
@@ -563,7 +735,6 @@ class BookingController {
         return res.json({ success: true, data: [] });
       }
 
-      // Versão compatível - sem o parâmetro 'mode'
       const products = await prisma.product.findMany({
         where: {
           OR: [{ code: { contains: search } }, { name: { contains: search } }],
@@ -619,11 +790,11 @@ class BookingController {
 
       const consumptionsTotal = booking.consumptions.reduce(
         (sum, c) => sum + c.totalPrice,
-        0,
+        0
       );
       const extrasTotal = booking.timeExtras.reduce(
         (sum, e) => sum + e.amount,
-        0,
+        0
       );
       calculatedAmount += consumptionsTotal + extrasTotal;
 

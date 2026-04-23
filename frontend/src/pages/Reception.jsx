@@ -99,10 +99,14 @@ const Reception = () => {
         loadData();
       });
 
-      socket.on("checkout-completed", () => {
-        console.log("📢 WebSocket: checkout-completed");
+      socket.on("checkout-confirmed", (data) => {
+        console.log("📢 WebSocket: checkout-confirmed", data);
+        // Recarregar dados e fechar modal se necessário
         loadData();
-        setSelectedBooking(null);
+        if (selectedBooking && selectedBooking.id === data.bookingId) {
+          setSelectedBooking(null);
+          toast.success(`Check-out do quarto ${data.roomNumber} confirmado!`);
+        }
       });
 
       socket.on("room-status-update", () => {
@@ -128,7 +132,6 @@ const Reception = () => {
         }
       });
 
-      // Adicionar listener para mudança de tipo de alocação
       socket.on("booking-type-changed", (data) => {
         console.log("📢 WebSocket: booking-type-changed", data);
         loadData();
@@ -144,7 +147,7 @@ const Reception = () => {
 
       return () => {
         socket.off("booking-created");
-        socket.off("checkout-completed");
+        socket.off("checkout-confirmed");
         socket.off("room-status-update");
         socket.off("consumption-added");
         socket.off("booking-type-changed");
@@ -334,6 +337,58 @@ const Reception = () => {
     }
   };
 
+  // Função para iniciar checkout (abrir modal e notificar tela de saída)
+  const handleStartCheckout = async (bookingId) => {
+    try {
+      console.log("🏁 Iniciando checkout do booking:", bookingId);
+
+      // Buscar o booking completo (agora a rota existe)
+      const response = await api.get(`/bookings/${bookingId}`);
+      const booking = response.data.data;
+
+      console.log("📋 Booking encontrado:", booking);
+
+      // Abrir o modal diretamente
+      setSelectedBooking(booking);
+
+      // Notificar a tela de saída
+      await api.post(`/bookings/${bookingId}/start-checkout`);
+
+      toast.info(
+        `Checkout do quarto ${booking.room.number} iniciado. Finalize no modal.`,
+      );
+    } catch (error) {
+      console.error("❌ Erro ao iniciar checkout:", error);
+      toast.error(
+        error.response?.data?.error?.message || "Erro ao iniciar checkout",
+      );
+    }
+  };
+
+  // Função para confirmar checkout (finalizar)
+  const handleConfirmCheckout = async (bookingId) => {
+    if (window.confirm("Confirmar finalização do check-out?")) {
+      try {
+        const response = await api.post(
+          `/bookings/${bookingId}/confirm-checkout`,
+        );
+
+        toast.success(response.data.message);
+
+        // Fechar modal
+        setSelectedBooking(null);
+
+        // Recarregar dados
+        await loadData();
+      } catch (error) {
+        console.error("❌ Erro ao confirmar checkout:", error);
+        toast.error(
+          error.response?.data?.error?.message || "Erro ao confirmar checkout",
+        );
+      }
+    }
+  };
+
   const handleSearchProduct = async (search) => {
     setSearchTerm(search);
     if (search.length >= 1) {
@@ -504,7 +559,6 @@ const Reception = () => {
           </div>
         </div>
       </div>
-
       {/* Grid de quartos */}
       <div className="p-4">
         <div className="max-w-7xl mx-auto">
@@ -581,28 +635,14 @@ const Reception = () => {
                     <p className="text-xs text-gray-400 mt-1">
                       {room.type?.name}
                     </p>
-
                     {isOccupied && activeBooking && (
                       <div className="mt-2 text-xs">
                         <p className="text-yellow-400 font-mono">
                           {currentTime?.display || "Calculando..."}
                         </p>
-                        <p className="text-green-400 font-bold text-sm">
-                          R$ {displayAmount.toFixed(2)}
+                        <p className="text-green-400 font-bold">
+                          R$ {(activeBooking.currentAmount || 0).toFixed(2)}
                         </p>
-                        <div className="mt-1 flex gap-1">
-                          <span
-                            className={`text-xs px-1 rounded ${
-                              activeBooking.bookingType === "OVERNIGHT"
-                                ? "bg-purple-600 text-white"
-                                : "bg-blue-600 text-white"
-                            }`}
-                          >
-                            {activeBooking.bookingType === "OVERNIGHT"
-                              ? "🌙 Pernoite"
-                              : "💰 Hora"}
-                          </span>
-                        </div>
                         <select
                           value={activeBooking.bookingType}
                           onChange={(e) => {
@@ -619,10 +659,11 @@ const Reception = () => {
                           <option value="OVERNIGHT">🌙 Pernoite</option>
                         </select>
 
+                        {/* Botão que abre o modal de checkout */}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleCheckout(activeBooking.id);
+                            handleStartCheckout(activeBooking.id);
                           }}
                           className="mt-2 w-full bg-red-600 text-white text-xs py-1 rounded hover:bg-red-700 flex items-center justify-center gap-1"
                         >
@@ -665,14 +706,13 @@ const Reception = () => {
           </div>
         </div>
       </div>
-
       {/* Modal de detalhes do quarto ocupado */}
       {selectedBooking && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center p-4 border-b border-gray-700 sticky top-0 bg-gray-800">
               <h2 className="text-2xl font-bold text-white">
-                Quarto {selectedBooking.room.number}
+                Quarto {selectedBooking.room.number} - Checkout
               </h2>
               <button
                 onClick={() => setSelectedBooking(null)}
@@ -683,6 +723,7 @@ const Reception = () => {
             </div>
 
             <div className="p-4 space-y-4">
+              {/* Botão TTS */}
               <button
                 onClick={announceCheckoutValue}
                 className="w-full bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 flex items-center justify-center gap-2"
@@ -691,6 +732,7 @@ const Reception = () => {
                 Falar Valor do Check-out
               </button>
 
+              {/* Informações do atendimento */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-gray-700 rounded-lg p-3">
                   <p className="text-sm text-gray-400">Tempo</p>
@@ -707,6 +749,7 @@ const Reception = () => {
                 </div>
               </div>
 
+              {/* Tipo de alocação */}
               <div className="bg-gray-700 rounded-lg p-3">
                 <p className="text-sm text-gray-400 mb-2">Tipo de Alocação</p>
                 <div className="flex gap-2">
@@ -737,6 +780,7 @@ const Reception = () => {
                 </div>
               </div>
 
+              {/* Busca de produtos */}
               <div className="bg-gray-700 rounded-lg p-3">
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="text-white font-bold">Adicionar Consumo</h3>
@@ -792,6 +836,7 @@ const Reception = () => {
                   </div>
                 )}
 
+                {/* Lista de consumos atuais */}
                 <div className="space-y-2 max-h-48 overflow-y-auto mt-3">
                   <h4 className="text-sm text-gray-400">Consumos Atuais:</h4>
                   {selectedBooking.consumptions?.map((item) => (
@@ -831,12 +876,13 @@ const Reception = () => {
                 </div>
               </div>
 
+              {/* Botão de finalizar checkout */}
               <button
-                onClick={() => handleCheckout(selectedBooking.id)}
-                className="w-full bg-red-600 text-white py-3 rounded-lg font-bold hover:bg-red-700 text-lg flex items-center justify-center gap-2"
+                onClick={() => handleConfirmCheckout(selectedBooking.id)}
+                className="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 text-lg flex items-center justify-center gap-2"
               >
                 <CheckIcon className="h-5 w-5" />
-                FINALIZAR CHECK-OUT
+                FINALIZAR CHECKOUT
               </button>
             </div>
           </div>
