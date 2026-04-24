@@ -88,6 +88,7 @@ const Reception = () => {
     loadData();
 
     if (socket) {
+      // Listeners existentes...
       socket.on("booking-created", () => {
         console.log("📢 WebSocket: booking-created");
         loadData();
@@ -102,8 +103,64 @@ const Reception = () => {
         }
       });
 
-      socket.on("room-status-update", () => {
-        console.log("📢 WebSocket: room-status-update");
+      socket.on("test-connection", (data) => {
+        console.log("📢 Teste de conexão recebido:", data);
+      });
+
+      // Adicione também um log para todos os eventos recebidos
+      socket.onAny((event, ...args) => {
+        console.log(`📢 Evento recebido: ${event}`, args);
+      });
+
+      // Listener específico para mudança de status do quarto
+      socket.on("room-status-changed", (data) => {
+        console.log("📢 WebSocket: room-status-changed recebido:", data);
+
+        // Atualizar o estado local dos quartos imediatamente
+        setRooms((prevRooms) =>
+          prevRooms.map((room) =>
+            room.id === data.roomId ? { ...room, status: data.status } : room,
+          ),
+        );
+
+        // Atualizar também a lista de bookings se necessário
+        if (data.status === "CLEANING") {
+          // Se o quarto foi para limpeza, remover da lista de bookings ativos
+          setBookings((prevBookings) =>
+            prevBookings.filter((booking) => booking.roomId !== data.roomId),
+          );
+        }
+
+        const statusText =
+          {
+            AVAILABLE: "Disponível",
+            OCCUPIED: "Ocupado",
+            CLEANING: "Limpeza",
+            MAINTENANCE: "Manutenção",
+          }[data.status] || data.status;
+
+        toast.success(`Quarto ${data.roomNumber} agora está em ${statusText}`);
+      });
+
+      socket.on("room-status-update", (data) => {
+        console.log("📢 WebSocket: room-status-update recebido:", data);
+
+        setRooms((prevRooms) =>
+          prevRooms.map((room) =>
+            room.id === data.roomId ? { ...room, status: data.status } : room,
+          ),
+        );
+      });
+
+      socket.on("dashboard-update", (data) => {
+        console.log("📢 WebSocket: dashboard-update recebido:", data);
+        if (data.type === "room-status") {
+          setRooms((prevRooms) =>
+            prevRooms.map((room) =>
+              room.id === data.roomId ? { ...room, status: data.status } : room,
+            ),
+          );
+        }
         loadData();
       });
 
@@ -138,25 +195,14 @@ const Reception = () => {
         }
       });
 
-      socket.on("checkout-consumption-updated", (data) => {
-        console.log("📢 WebSocket: checkout-consumption-updated", data);
-        if (selectedBooking && selectedBooking.id === data.bookingId) {
-          setSelectedBooking((prev) => ({
-            ...prev,
-            consumptions: data.consumptions,
-            currentAmount: data.newCurrentAmount,
-          }));
-        }
-        loadData();
-      });
-
       return () => {
         socket.off("booking-created");
         socket.off("checkout-confirmed");
+        socket.off("room-status-changed");
         socket.off("room-status-update");
+        socket.off("dashboard-update");
         socket.off("consumption-added");
         socket.off("booking-type-changed");
-        socket.off("checkout-consumption-updated");
       };
     }
   }, [socket, selectedBooking]);
@@ -214,6 +260,16 @@ const Reception = () => {
     setCurrentTimes(newTimes);
   };
 
+  const loadRooms = async () => {
+    try {
+      const response = await api.get("/rooms");
+      setRooms(response.data.data);
+    } catch (error) {
+      console.error("Erro ao carregar quartos:", error);
+    }
+  };
+
+  // Chamar loadRooms junto com loadData
   const loadData = async () => {
     try {
       console.log("🔄 Carregando dados...");
@@ -277,14 +333,36 @@ const Reception = () => {
 
   const handleChangeRoomStatus = async (roomId, status) => {
     try {
-      await api.patch(`/bookings/rooms/${roomId}/status`, { status });
+      console.log(`🔄 Alterando status do quarto ${roomId} para ${status}`);
+
+      const response = await api.patch(`/bookings/rooms/${roomId}/status`, {
+        status,
+      });
+
+      console.log("✅ Resposta do servidor:", response.data);
+
+      // Atualizar o estado local imediatamente
+      setRooms((prevRooms) =>
+        prevRooms.map((room) =>
+          room.id === roomId ? { ...room, status: status } : room,
+        ),
+      );
+
+      // Recarregar dados do backend
       await loadData();
+
       setShowStatusMenu(null);
+
       if (selectedBooking?.roomId === roomId) {
         setSelectedBooking(null);
       }
+
+      toast.success(response.data.message);
     } catch (error) {
-      console.error("Erro ao alterar status:", error);
+      console.error("❌ Erro ao alterar status:", error);
+      toast.error(
+        error.response?.data?.error?.message || "Erro ao alterar status",
+      );
     }
   };
 
@@ -331,8 +409,16 @@ const Reception = () => {
           `/bookings/${bookingId}/confirm-checkout`,
         );
         toast.success(response.data.message);
+
+        // Fechar modal
         setSelectedBooking(null);
+
+        // Recarregar dados imediatamente
         await loadData();
+
+        // Forçar atualização dos quartos
+        const roomsResponse = await api.get("/rooms");
+        setRooms(roomsResponse.data.data);
       } catch (error) {
         console.error("❌ Erro ao confirmar checkout:", error);
         toast.error(
@@ -469,6 +555,15 @@ const Reception = () => {
               <p className="text-xs text-gray-500">
                 {new Date().toLocaleString()}
               </p>
+              <button
+                onClick={() => {
+                  loadData();
+                  toast.success("Dados recarregados!");
+                }}
+                className="bg-blue-600 text-white px-3 py-1 rounded text-sm"
+              >
+                🔄 Recarregar
+              </button>
             </div>
           </div>
 
